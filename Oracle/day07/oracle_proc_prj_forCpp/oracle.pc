@@ -1,0 +1,236 @@
+/* * oracle.c
+ *
+ *  Created on: 2014年5月29日
+ *      Author: zhujy
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+void sqlglmt(void*, char*, size_t*, size_t* ); 
+#ifdef __cplusplus
+}
+#endif
+
+//嵌入式SQL中使用的变量，必须再EXEC SQL BEGIN DECLARE SECTION申明
+EXEC SQL BEGIN DECLARE SECTION; 
+	sql_context pContext;
+	long SQLCODE;
+EXEC SQL END DECLARE SECTION;
+
+
+void sql_error()//打印错误信息
+{
+	char sErrorString[512];//定义一个buf，存放错误描述
+	size_t tMessageSize = 0;
+	size_t tErrorSize = sizeof(sErrorString);
+	memset(sErrorString, 0, sizeof(sErrorString));
+	sqlglmt(pContext, sErrorString, &tErrorSize, &tMessageSize);//调用oracle的api函数得到错误信息
+	sErrorString[tMessageSize] = 0;
+	printf("%s\n", sErrorString);//打印错误信息
+}
+
+void sql_init()//初始化oracle
+{
+	SQLCODE = 0;
+	pContext = NULL;
+	
+	//如果proc的THREADS=YES，那么proc程序第一条嵌入SQL语句就应该是EXEC SQL ENABLE THREADS
+	EXEC SQL ENABLE THREADS;
+	
+	//分配资源
+	EXEC SQL CONTEXT ALLOCATE :pContext;
+	//使用资源
+	EXEC SQL CONTEXT USE :pContext;
+}
+
+int sql_connect(const char *User, const char *Password, const char *DBName)//连接到oracle
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		const char *sUser;
+		const char *sPassword;
+		const char *sServer;
+	EXEC SQL END DECLARE SECTION;
+	SQLCODE = 0;
+	sUser = User;//连接oracle的用户名
+	sPassword = Password;//连接oracle的密码
+	sServer = DBName;//连接oracle的数据库名
+	EXEC SQL CONNECT :sUser IDENTIFIED BY :sPassword USING :sServer;//连接到oracle的嵌入式SQL
+	if (SQLCODE != 0)//如果SQLCODE ！= 0代表连接失败
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int sql_exec(const char *DySQL)//执行非select SQL语句
+{
+	EXEC SQL BEGIN DECLARE SECTION; 
+		const char *sDySQL;
+	EXEC SQL END DECLARE SECTION;
+	
+	SQLCODE = 0;
+	sDySQL = DySQL;
+	EXEC SQL EXECUTE IMMEDIATE :sDySQL;//执行非select SQL语句
+	if (SQLCODE != 0)//如果SQLCODE ！= 0代表执行失败
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int sql_commit()//提交事务
+{
+	SQLCODE = 0;
+	EXEC SQL COMMIT WORK;
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int sql_rollback()//回滚事务
+{
+	SQLCODE = 0;
+	EXEC SQL ROLLBACK WORK;
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int sql_open(const char *DySQL)//执行select SQL语句
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		int i, iOutput_count, iOccurs, iType, iLen;
+		short iInd;	
+		char sName[1024];//存放SELECT语句查询到的字段名
+		char sData[1024];//存放SELECT语句查询到的字段值
+		char sOutput[64];
+		char sInput[64];
+		const char *sDySQL;
+	EXEC SQL END DECLARE SECTION;
+	SQLCODE = 0;
+	sDySQL = DySQL;	
+	sprintf(sOutput, "output%p", pContext);//格式化一个进程唯一不重复的字符串
+	sprintf(sInput, "input%p", pContext);//格式化一个进程唯一不重复的字符串
+	EXEC SQL ALLOCATE DESCRIPTOR :sOutput;//分配输出缓冲区
+	EXEC SQL ALLOCATE DESCRIPTOR :sInput;//分配输入缓冲区
+	EXEC SQL PREPARE S FROM :sDySQL;//准备执行sDySQL指定的SELECT语句
+	if (SQLCODE != 0)//如果SQLCODE ！= 0代表执行失败
+	{
+		sql_error();
+		EXEC SQL DEALLOCATE DESCRIPTOR :sInput;//释放输出缓冲区
+		EXEC SQL DEALLOCATE DESCRIPTOR :sOutput;//释放输入缓冲区
+		return 1;		
+	}		
+
+	EXEC SQL DECLARE C CURSOR FOR S;//申请一个游标，名为C	
+	EXEC SQL OPEN C USING DESCRIPTOR :sInput;//打开游标C
+	
+	EXEC SQL DESCRIBE OUTPUT S USING DESCRIPTOR :sOutput;//选择输出区域
+	
+	EXEC SQL GET DESCRIPTOR :sOutput :iOutput_count = COUNT;//取得选择列表的个数，放入变量iOutput_count当中
+	
+	for(i=0;i<iOutput_count;i++)//循环遍历字段，将所有字段名输出到屏幕
+	{
+		
+		memset(sData, 0, sizeof(sData));
+		memset(sName, 0, sizeof(sName));
+		
+		//得到SELECT语句查询返回的字段描述
+		//sName中存放查询到的字段名，iType中存放字段类型，iLen中存放字段长度
+		
+		iOccurs = i + 1;//GET DESCRIPTOR语句中字段是从1开始的，所以iOccurs要从1开始执行
+		EXEC SQL GET DESCRIPTOR :sOutput
+			VALUE :iOccurs :iType = TYPE, :iLen = LENGTH, :sName = NAME;	
+		
+		printf("%s\t", sName);//在屏幕打印字段名称
+		
+		iType = 12;//设置字段为字符串类型
+		iLen = sizeof(sData);//设置接收字段返回值buffer最大长度为sizeof(sData)
+		EXEC SQL SET DESCRIPTOR :sOutput 
+			VALUE :iOccurs TYPE = :iType, LENGTH = :iLen;	
+	}
+	
+	printf("\n");//字段名打印完毕，在屏幕上打印一个回车符
+
+	EXEC SQL WHENEVER NOT FOUND DO BREAK;
+	while(1)//循环遍历所有行，将行中所有字段值输出到屏幕
+	{
+		/*行数据，输出描述区*/ 
+		EXEC SQL FETCH C INTO DESCRIPTOR :sOutput;//得到一行记录
+		for(i=0;i < iOutput_count;i++)//循环遍历一行记录中的每一个字段
+		{
+			iOccurs = i + 1;
+			memset(sData, 0, sizeof(sData));
+			iInd = 0;
+			
+			EXEC SQL GET DESCRIPTOR :sOutput
+				VALUE :iOccurs :sData = DATA, :iInd = INDICATOR;
+			if (iInd == -1)//如果字段中有NULL值，iInd == -1
+			{
+				printf("%s\t", "NULL");
+			}
+			else
+			{
+				printf("%s\t", sData);
+			}
+		}
+		printf("\n");//一行记录打印完毕，在屏幕上打印一个回车符
+	}
+	EXEC SQL CLOSE C;//关闭游标C
+	EXEC SQL DEALLOCATE DESCRIPTOR :sOutput;//释放输出缓冲区
+	EXEC SQL DEALLOCATE DESCRIPTOR :sInput;//释放输入缓冲区
+	return 0;
+}
+
+int sql_disconnect()//断开连接
+{
+	SQLCODE = 0;
+	EXEC SQL ROLLBACK WORK RELEASE;//断开连接，回滚事务
+	//EXEC SQL COMMIT WORK RELEASE;//断开连接，提交事务
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int sql_free()//释放资源
+{
+	SQLCODE = 0;
+	EXEC SQL CONTEXT FREE :pContext;	
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+
