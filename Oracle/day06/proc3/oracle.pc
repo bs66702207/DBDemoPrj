@@ -1,0 +1,225 @@
+/*
+ ============================================================================
+ Name        : oracle.c
+ Author      : zhujy
+ Version     :
+ Copyright   : Your copyright notice
+ Description : Hello World in C, Ansi-style
+ ============================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+
+//在pc文件当中，如果是嵌入式的SQL语句需要用到的变量，并且proc PARSE=PARTIAL,那么变量必须再BEGIN和END之间定义。
+EXEC SQL BEGIN DECLARE SECTION; 
+	sql_context pContext;
+	long SQLCODE;//变量类型和名称都不可以改变
+EXEC SQL END DECLARE SECTION;
+
+
+extern void sqlglmt(void*, char*, size_t*, size_t* ); 
+//安装错误处理函数
+void sql_error()
+{
+	char sErrorString[512];//自定义一个数组，数组的名字可以自定义
+	size_t tMessageSize = 0;
+	size_t tErrorSize = sizeof(sErrorString);
+	memset(sErrorString, 0, sizeof(sErrorString));
+	sqlglmt(pContext, sErrorString, &tErrorSize, &tMessageSize);//调用sqlglmt这个函数得到具体错误描述
+	sErrorString[tMessageSize] = 0;//设置错误描述字符串最后以0结尾
+	printf("%s\n", sErrorString);//打印错误描述
+}
+
+//初始化数据库
+void sql_init()
+{
+	SQLCODE = 0;
+	pContext = NULL;
+	EXEC SQL ENABLE THREADS;//可以在代码当中生成线程相关代码
+	EXEC SQL CONTEXT ALLOCATE :pContext;//为pContext分配内存
+	EXEC SQL CONTEXT USE :pContext;//使用pContext
+}
+
+int sql_connect(const char *user, const char *passwd, const char *dbname)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		const char *sUser;
+		const char *sPasswd;
+		const char *sDBname;
+	
+	EXEC SQL END DECLARE SECTION;
+	SQLCODE = 0;
+	sUser = user;
+	sPasswd = passwd;
+	sDBname = dbname;
+	
+	//在嵌入式SQL语句里面 冒号代表要用输入变量
+	EXEC SQL CONNECT :sUser IDENTIFIED BY :sPasswd USING :sDBname;
+	
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int sql_disconnect()
+{
+	SQLCODE = 0;
+	EXEC SQL COMMIT WORK RELEASE;
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int sql_free()
+{
+	SQLCODE = 0;
+	EXEC SQL CONTEXT FREE :pContext;
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+	
+}
+
+int sql_commit()
+{
+	SQLCODE = 0;
+	EXEC SQL COMMIT WORK;
+	if (SQLCODE != 0)
+    {
+        sql_error();
+        return 1;
+    }else
+    {
+        return 0;
+    }
+}
+
+int sql_rollback()
+{
+	SQLCODE = 0;
+	EXEC SQL ROLLBACK WORK;
+	if (SQLCODE != 0)
+    {
+        sql_error();
+        return 1;
+    }else
+    {
+        return 0;
+    }
+}
+
+int sql_exec1(const char *s)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char SQL[1024];
+	EXEC SQL END DECLARE SECTION;
+	
+	SQLCODE = 0;
+	memset(SQL, 0, sizeof(SQL));
+	strcpy(SQL, s);
+	EXEC SQL EXECUTE IMMEDIATE :SQL;
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int sql_exec2()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char SQL[1204];
+		int id;
+		char name[30];
+	EXEC SQL END DECLARE SECTION;
+	id =4;
+	memset(SQL, 0, sizeof(SQL));
+	memset(name ,0, sizeof(name));
+	strcpy(name, "张学友");
+	strcpy(SQL, "insert into table1(id, name) values(:id, :name)");
+	
+	SQLCODE = 0;
+	EXEC SQL PREPARE stat FROM :SQL;//准备执行一条SQL语句，
+	EXEC SQL EXECUTE stat USING :id, :name;//根据输入宿主变量的值，执行SQL
+	
+	//insert into table1 (id, name) values (1, '张学友')
+	if (SQLCODE != 0)
+    {
+        sql_error();
+        return 1;
+    }else
+    {
+        return 0;
+    }
+}
+
+int sql_exec3()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+        char SQL[1204];
+		int n;
+        int id;
+        char name[30];
+    EXEC SQL END DECLARE SECTION;
+	memset(SQL, 0, sizeof(SQL));
+    memset(name ,0, sizeof(name));
+	n = 1;
+	strcpy(SQL, "select id, name from table1 where id =:n");
+	EXEC SQL PREPARE stat FROM :SQL;//准备执行一条动态SQL，
+	
+	EXEC SQL DECLARE C1 CURSOR FOR stat;//定义一个钢表，名字叫C1
+	EXEC SQL OPEN C1 USING :n;//在光标c中使用输入宿主变量
+	EXEC SQL OPEN C1;//打开这个光标
+	EXEC SQL WHENEVER NOT FOUND DO break;//循环读取光标，读取表中每一行，直到最后没有数据,循环break
+	while(1)
+	{
+		EXEC SQL FETCH C1 INTO :id, :name;//将查询结果放入到输出变量
+		printf("id = %d, name = %s\n", id, name);
+	}
+	return 0;
+}
+
+int main(void)
+{
+	sql_init();
+	sql_connect("dbuser1", "1", "orcl");
+
+#if 0	
+	system("stty erase ^H");
+	char buf[1024];
+	memset(buf, 0, sizeof(buf));
+	read(STDIN_FILENO, buf, sizeof(buf));
+	buf[strlen(buf) - 1] = 0;
+	sql_exec1(buf);
+#endif
+
+	//sql_exec2();
+	sql_exec3();
+	
+//	sql_commit();
+	sql_disconnect();
+	sql_free();
+	return EXIT_SUCCESS;
+}

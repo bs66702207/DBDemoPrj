@@ -1,0 +1,130 @@
+/*
+ ============================================================================
+ Name        : oracle.c
+ Author      : zhujy
+ Version     :
+ Copyright   : Your copyright notice
+ Description : Hello World in C, Ansi-style
+ ============================================================================
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+
+//在pc文件当中，如果是嵌入式的SQL语句需要用到的变量，并且proc PARSE=PARTIAL,那么变量必须再BEGIN和END之间定义。
+EXEC SQL BEGIN DECLARE SECTION; 
+	sql_context pContext;
+	long SQLCODE;//变量类型和名称都不可以改变
+EXEC SQL END DECLARE SECTION;
+
+
+extern void sqlglmt(void*, char*, size_t*, size_t* ); 
+//安装错误处理函数
+void sql_error()
+{
+	char sErrorString[512];//自定义一个数组，数组的名字可以自定义
+	size_t tMessageSize = 0;
+	size_t tErrorSize = sizeof(sErrorString);
+	memset(sErrorString, 0, sizeof(sErrorString));
+	sqlglmt(pContext, sErrorString, &tErrorSize, &tMessageSize);//调用sqlglmt这个函数得到具体错误描述
+	sErrorString[tMessageSize] = 0;//设置错误描述字符串最后以0结尾
+	printf("%s\n", sErrorString);//打印错误描述
+}
+
+//初始化数据库
+void sql_init()
+{
+	SQLCODE = 0;
+	pContext = NULL;
+	EXEC SQL ENABLE THREADS;//可以在代码当中生成线程相关代码
+	EXEC SQL CONTEXT ALLOCATE :pContext;//为pContext分配内存
+	EXEC SQL CONTEXT USE :pContext;//使用pContext
+}
+
+int sql_connect(const char *user, const char *passwd, const char *dbname)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		const char *sUser;
+		const char *sPasswd;
+		const char *sDBname;
+	
+	EXEC SQL END DECLARE SECTION;
+	SQLCODE = 0;
+	sUser = user;
+	sPasswd = passwd;
+	sDBname = dbname;
+	
+	//在嵌入式SQL语句里面 冒号代表要用输入变量
+	EXEC SQL CONNECT :sUser IDENTIFIED BY :sPasswd USING :sDBname;
+	
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int sql_disconnect()
+{
+	SQLCODE = 0;
+	EXEC SQL COMMIT WORK RELEASE;
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int sql_free()
+{
+	SQLCODE = 0;
+	EXEC SQL CONTEXT FREE :pContext;
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+	
+}
+
+int sql_exec1()
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+		char SQL[1024];
+	EXEC SQL END DECLARE SECTION;
+	
+	SQLCODE = 0;
+	memset(SQL, 0, sizeof(SQL));
+	strcpy(SQL, "insert into table1 (id, name) values (11, '测试11')");
+	EXEC SQL EXECUTE IMMEDIATE :SQL;
+	if (SQLCODE != 0)
+	{
+		sql_error();
+		return 1;
+	}else
+	{
+		return 0;
+	}
+}
+
+int main(void)
+{
+	sql_init();
+	sql_connect("dbuser1", "1", "orcl");
+	sql_exec1();
+	sql_disconnect();
+	sql_free();
+	return EXIT_SUCCESS;
+}
